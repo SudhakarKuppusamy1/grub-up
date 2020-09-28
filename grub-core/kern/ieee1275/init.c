@@ -49,6 +49,9 @@
 #if defined(__powerpc__) || defined(__i386__)
 #include <grub/ieee1275/alloc.h>
 #endif
+#if defined(__powerpc__)
+#include <grub/lockdown.h>
+#endif
 
 /* The maximum heap size we're going to claim at boot. Not used by sparc. */
 #ifdef __i386__
@@ -995,6 +998,41 @@ grub_parse_cmdline (void)
     }
 }
 
+#ifdef __powerpc__
+static void
+grub_get_ieee1275_secure_boot (void)
+{
+  grub_ieee1275_phandle_t root;
+  int rc;
+  grub_uint32_t is_sb;
+
+  rc = grub_ieee1275_finddevice ("/", &root);
+  if (rc != 0)
+    {
+      grub_error (GRUB_ERR_UNKNOWN_DEVICE, "couldn't find / node");
+      return;
+    }
+
+  rc = grub_ieee1275_get_integer_property (root, "ibm,secure-boot", &is_sb, sizeof (is_sb), 0);
+  if (rc != 0)
+    {
+      grub_error (GRUB_ERR_UNKNOWN_DEVICE, "couldn't examine /ibm,secure-boot property");
+      return;
+    }
+  /*
+   * ibm,secure-boot:
+   * 0 - disabled
+   * 1 - audit
+   * 2 - enforce
+   * 3 - enforce + OS-specific behaviour
+   *
+   * We only support enforce.
+   */
+  if (is_sb >= 2)
+    grub_lockdown ();
+}
+#endif
+
 grub_addr_t grub_modbase;
 
 void
@@ -1019,6 +1057,10 @@ grub_machine_init (void)
   grub_tsc_init ();
 #else
   grub_install_get_time_ms (grub_rtc_get_time_ms);
+#endif
+
+#ifdef __powerpc__
+  grub_get_ieee1275_secure_boot ();
 #endif
 }
 
