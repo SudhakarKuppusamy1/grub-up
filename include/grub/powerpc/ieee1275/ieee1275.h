@@ -28,4 +28,25 @@ typedef grub_uint32_t grub_ieee1275_cell_t;
 #define PRIxGRUB_IEEE1275_CELL_T	PRIxGRUB_UINT32_T
 #define PRIuGRUB_IEEE1275_CELL_T	PRIuGRUB_UINT32_T
 
+#ifdef __powerpc__
+
+extern int
+EXPORT_FUNC (grub_ieee1275_test) (const char *name,
+                                  grub_ieee1275_cell_t *missing);
+
+extern int
+grub_ieee1275_pks_max_object_size (grub_size_t *result);
+
+extern int
+grub_ieee1275_pks_read_object (grub_uint8_t consumer, grub_uint8_t *label,
+                               grub_size_t label_len, grub_uint8_t *buffer,
+                               grub_size_t buffer_len, grub_size_t *data_len,
+                               grub_uint32_t *policies);
+
+extern int
+grub_ieee1275_pks_read_sbvar (grub_uint8_t sbvarflags, grub_uint8_t sbvartype,
+                              grub_uint8_t *buffer, grub_size_t buffer_len,
+                              grub_size_t *data_len);
+#endif
+
 #endif /* ! GRUB_IEEE1275_MACHINE_HEADER */
