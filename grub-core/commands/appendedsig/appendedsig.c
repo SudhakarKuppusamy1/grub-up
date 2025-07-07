@@ -103,6 +103,38 @@ static enum
   CHECK_SIGS_FORCED = 2
 } check_sigs = CHECK_SIGS_NO;
 
+enum
+{
+  OPTION_BINARY_HASH = 0,
+  OPTION_CERT_HASH = 1
+};
+
+static const struct grub_arg_option options[] =
+{
+  {"binary-hash", 'b', 0, N_("hash file of the binary."), 0, ARG_TYPE_NONE},
+  {"cert-hash", 'c', 1, N_("hash file of the certificate."), 0, ARG_TYPE_NONE},
+  {0, 0, 0, 0, 0, 0}
+};
+
+static void
+print_hex (const grub_uint8_t *data, const grub_size_t length)
+{
+  grub_size_t i, count = 0;
+
+  for (i = 0; i < length-1; i++)
+    {
+      grub_printf ("%02x:", data[i]);
+      count++;
+      if (count == 16)
+        {
+          grub_printf ("\n\t      ");
+          count = 0;
+        }
+    }
+
+  grub_printf ("%02x\n", data[i]);
+}
+
 /*
  * GUID can be used to determine the hashing function and
  * generate the hash using determined hashing function.
@@ -616,122 +648,44 @@ static grub_err_t
 grub_cmd_verify_signature (grub_command_t cmd __attribute__ ((unused)), int argc, char **args)
 {
   grub_file_t signed_file;
-  grub_err_t err = GRUB_ERR_NONE;
-  grub_uint8_t *data;
-  grub_size_t file_size;
+  grub_err_t err;
+  grub_uint8_t *signed_data;
+  grub_size_t signed_data_size;
 
   if (argc != 1)
-    return grub_error (GRUB_ERR_BAD_ARGUMENT, "one argument expected.");
+    {
+      grub_printf ("a signed file is expected.\n"
+                   "Example:\n\tappend_verify <SIGNED FILE>\n");
+      return GRUB_ERR_BAD_ARGUMENT;
+    }
 
   grub_dprintf ("appendedsig", "verifying %s\n", args[0]);
 
   signed_file = grub_file_open (args[0], GRUB_FILE_TYPE_VERIFY_SIGNATURE);
   if (signed_file == NULL)
-    return grub_error (GRUB_ERR_BAD_FILE_TYPE, "could not open %s file.", args[0]);
+    return grub_error (GRUB_ERR_FILE_NOT_FOUND, "could not open %s file.", args[0]);
 
-  err = file_read_all (signed_file, &data, &file_size);
+  err = file_read_all (signed_file, &signed_data, &signed_data_size);
   if (err == GRUB_ERR_NONE)
-    err = grub_verify_appended_signature (data, file_size);
+    err = grub_verify_appended_signature (signed_data, signed_data_size);
 
   grub_file_close (signed_file);
-  grub_free (data);
+  grub_free (signed_data);
 
   return err;
 }
 
 static grub_err_t
-grub_cmd_dbx (grub_command_t cmd __attribute__ ((unused)), int argc, char **args)
-{
-  unsigned long cert_num, i = 0;
-  const char *end;
-  struct x509_certificate *cert, *prev_cert;
-
-  if (argc != 1)
-    return grub_error (GRUB_ERR_BAD_ARGUMENT, "one argument expected.");
-
-  cert_num = grub_strtoul (args[0], &end, 10);
-  if (*(args[0]) == '\0' || *end != '\0')
-    return grub_error (GRUB_ERR_BAD_ARGUMENT,
-                       "non-numeric or certificate number is invalid %s", args[0]);
-  else if (cert_num == 0)
-    return grub_error (GRUB_ERR_OUT_OF_RANGE, "certificate numbers start at 1.");
-
-  for (cert = prev_cert = db.certs; cert != NULL; cert = cert->next)
-    {
-      if (cert_num == 1) /* Match with first certificate in the db. */
-        {
-          db.certs = cert->next;
-          break;
-        }
-      else if (cert_num == i)
-        {
-          prev_cert->next = cert->next;
-          break;
-        }
-
-      prev_cert = cert;
-      i++;
-    }
-
-  if (cert != NULL)
-    {
-      db.cert_entries--;
-      certificate_release (cert);
-      grub_free (cert);
-      return GRUB_ERR_NONE;
-    }
-
-  return grub_error (GRUB_ERR_BAD_ARGUMENT,
-                     "not found certificate number %lu in the db.", cert_num);
-}
-
-static grub_err_t
-grub_cmd_db (grub_command_t cmd __attribute__ ((unused)), int argc, char **args)
-{
-  grub_file_t certf;
-  struct x509_certificate *cert = NULL;
-  grub_err_t err;
-
-  if (argc != 1)
-    return grub_error (GRUB_ERR_BAD_ARGUMENT, "one argument expected.");
-
-  certf = grub_file_open (args[0], GRUB_FILE_TYPE_CERTIFICATE_TRUST | GRUB_FILE_TYPE_NO_DECOMPRESS);
-  if (certf == NULL)
-    return grub_error (GRUB_ERR_BAD_FILE_TYPE, "could not open %s file.", args[0]);
-
-  cert = grub_zalloc (sizeof (struct x509_certificate));
-  if (cert == NULL)
-    return grub_error (GRUB_ERR_OUT_OF_MEMORY, "could not allocate memory for certificate.");
-
-  err = read_cert_from_file (certf, cert);
-  grub_file_close (certf);
-  if (err != GRUB_ERR_NONE)
-    {
-      grub_free (cert);
-      return err;
-    }
-
-  grub_dprintf ("appendedsig", "loaded certificate with CN: %s\n", cert->subject);
-
-  cert->next = db.certs;
-  db.certs = cert;
-  db.cert_entries++;
-
-  return GRUB_ERR_NONE;
-}
-
-static grub_err_t
-grub_cmd_list (grub_command_t cmd __attribute__ ((unused)), int argc __attribute__ ((unused)),
-               char **args __attribute__ ((unused)))
+grub_cmd_list_db (grub_command_t cmd __attribute__((unused)),
+                  int argc __attribute__((unused)), char **args __attribute__((unused)))
 {
   struct x509_certificate *cert;
-  int cert_num = 1;
-  grub_size_t i;
+  grub_size_t i, cert_num = 1;
 
-  for (cert = db.certs; cert != NULL; cert = cert->next)
+  for (cert = db.certs; cert; cert = cert->next)
     {
-      grub_printf ("Certificate %d:\n", cert_num);
-      grub_printf ("\tSerial: ");
+      grub_printf ("trusted certificate %" PRIuGRUB_SIZE ":\n", cert_num);
+      grub_printf ("\tserial: ");
 
       for (i = 0; i < cert->serial_len - 1; i++)
         grub_printf ("%02x:", cert->serial[i]);
@@ -741,7 +695,295 @@ grub_cmd_list (grub_command_t cmd __attribute__ ((unused)), int argc __attribute
       cert_num++;
     }
 
+  for (i = 0; i < db.signature_entries; i++)
+    {
+      grub_printf ("trusted binary hash %" PRIuGRUB_SIZE ":\n", i + 1);
+      grub_printf ("\thash: ");
+      print_hex (db.signatures[i], db.signature_size[i]);
+    }
+
   return GRUB_ERR_NONE;
+}
+
+static grub_err_t
+grub_cmd_list_dbx (grub_command_t cmd __attribute__((unused)),
+                   int argc __attribute__((unused)), char **args __attribute__((unused)))
+{
+  struct x509_certificate *cert;
+  grub_size_t i, cert_num = 1;
+
+  for (cert = dbx.certs; cert; cert = cert->next)
+    {
+      grub_printf ("distrusted certificate %" PRIuGRUB_SIZE ":\n", cert_num);
+      grub_printf ("\tserial: ");
+
+      for (i = 0; i < cert->serial_len - 1; i++)
+        grub_printf ("%02x:", cert->serial[i]);
+
+      grub_printf ("%02x\n", cert->serial[cert->serial_len - 1]);
+      grub_printf ("\tCN: %s\n\n", cert->subject);
+      cert_num++;
+    }
+
+  for (i = 0; i < dbx.signature_entries; i++)
+    {
+      grub_printf ("distrusted certificate/binary hash %" PRIuGRUB_SIZE ":\n", i + 1);
+      grub_printf ("\thash: ");
+      print_hex (dbx.signatures[i], dbx.signature_size[i]);
+    }
+
+  return GRUB_ERR_NONE;
+}
+
+static grub_err_t
+grub_cmd_db_cert (grub_command_t cmd __attribute__((unused)), int argc, char **args)
+{
+  grub_err_t err;
+  grub_file_t cert_file;
+  grub_uint8_t *cert_data = NULL;
+  grub_size_t cert_data_size = 0;
+
+  if (argc != 1)
+    {
+      grub_printf ("a trusted X.509 certificate file is expected in DER format.\n"
+                   "Example:\n\tappend_add_db_cert <CERT FILE>\n");
+      return GRUB_ERR_BAD_ARGUMENT;
+    }
+
+  if (check_sigs == CHECK_SIGS_FORCED)
+    {
+      grub_printf ("Warning: since secure boot is enabled, "
+                   "adding of trusted X.509 certificate is not permitted!\n");
+      return GRUB_ERR_ACCESS_DENIED;
+    }
+
+  if (grub_strlen (args[0]) == 0)
+    return grub_error (GRUB_ERR_BAD_FILENAME, "missing trusted X.509 certificate file.");
+
+  cert_file = grub_file_open (args[0], GRUB_FILE_TYPE_CERTIFICATE_TRUST |
+                              GRUB_FILE_TYPE_NO_DECOMPRESS);
+  if (cert_file == NULL)
+    return grub_error (GRUB_ERR_FILE_NOT_FOUND, "unable to open the trusted X.509 certificate file.");
+
+  err = file_read_all (cert_file, &cert_data, &cert_data_size);
+  if (err != GRUB_ERR_NONE)
+    goto cleanup;
+
+  err = add_certificate (cert_data, cert_data_size, &db, true);
+  if (err != GRUB_ERR_NONE)
+    {
+      free_db_list ();
+      free_dbx_list ();
+      err = grub_error (err, "adding of trusted certificate failed.");
+    }
+
+ cleanup:
+  grub_file_close (cert_file);
+  grub_free (cert_data);
+
+  return err;
+}
+
+static grub_err_t
+grub_cmd_db_sig (grub_command_t cmd __attribute__((unused)), int argc, char**args)
+{
+  grub_err_t rc;
+  grub_file_t hash_file;
+  grub_uint8_t *hash_data = NULL;
+  grub_size_t hash_data_size = 0;
+
+  if (argc != 1)
+    {
+      grub_printf ("a trusted binary hash file is expected.\n"
+                   "Example:\n\tappend_add_db_sig <BINARY HASH FILE>\n");
+      return GRUB_ERR_BAD_ARGUMENT;
+    }
+
+  if (check_sigs == CHECK_SIGS_FORCED)
+    {
+      grub_printf ("Warning: since secure boot is enabled, "
+                   "adding of trusted binary hash is not permitted!\n");
+      return GRUB_ERR_ACCESS_DENIED;
+    }
+
+  if (grub_strlen (args[0]) == 0)
+    return grub_error (GRUB_ERR_BAD_FILENAME, "missing trusted binary hash file");
+
+  hash_file = grub_file_open (args[0], GRUB_FILE_TYPE_TO_HASH | GRUB_FILE_TYPE_NO_DECOMPRESS);
+  if (hash_file == NULL)
+    return grub_error (GRUB_ERR_FILE_NOT_FOUND, "unable to open the trusted binary hash file");
+
+  rc = file_read_all (hash_file, &hash_data, &hash_data_size);
+  if (rc != GRUB_ERR_NONE)
+    goto cleanup;
+
+  grub_dprintf ("appendedsig", "adding a trusted binary hash %s\n with size of %" PRIuGRUB_SIZE "\n",
+                hash_data, hash_data_size);
+
+  /* Only accept SHA256, SHA384 and SHA512 binary hash */
+  if (hash_data_size != 32 && hash_data_size != 48 && hash_data_size != 64)
+    return grub_error (GRUB_ERR_BAD_SIGNATURE, "unacceptable trusted binary hash type.");
+
+  rc = add_hash ((const grub_uint8_t **) &hash_data, hash_data_size, &db.signatures,
+                 &db.signature_size, &db.signature_entries);
+  if (rc != GRUB_ERR_NONE)
+    {
+      free_db_list ();
+      free_dbx_list ();
+      rc = grub_error (rc, "adding of trusted binary hash failed.");
+    }
+
+ cleanup:
+  grub_file_close (hash_file);
+  grub_free (hash_data);
+
+  return rc;
+}
+
+static grub_err_t
+grub_cmd_dbx_cert (grub_command_t cmd __attribute__ ((unused)), int argc, char **args)
+{
+  grub_size_t i;
+  grub_err_t err;
+  grub_file_t cert_file;
+  struct x509_certificate *current_cert = db.certs;
+  struct x509_certificate *previous_cert = NULL;
+  struct x509_certificate *cert = NULL;
+  bool is_cert_found = false;
+
+  if (argc != 1)
+    {
+      grub_printf ("a distrusted X.509 certificate file is expected in DER format.\n"
+                   "Example:\n\tappend_rm_dbx_cert <CERT FILE>\n");
+      return GRUB_ERR_BAD_ARGUMENT;
+    }
+
+  if (check_sigs == CHECK_SIGS_FORCED)
+    {
+      grub_printf ("Warning: since secure boot is enabled, "
+                   "adding of distrusted X.509 certificate is not permitted!\n");
+      return GRUB_ERR_ACCESS_DENIED;
+    }
+
+  if (grub_strlen (args[0]) == 0)
+    return grub_error (GRUB_ERR_BAD_FILENAME, "missing distrusted X.509 certificate file.");
+
+  cert_file = grub_file_open (args[0], GRUB_FILE_TYPE_CERTIFICATE_TRUST |
+                              GRUB_FILE_TYPE_NO_DECOMPRESS);
+  if (cert_file == NULL)
+    return grub_error (GRUB_ERR_FILE_NOT_FOUND, "unable to open the distrusted X.509 certificate file.");
+
+  cert = grub_zalloc (sizeof (struct x509_certificate));
+  if (cert == NULL)
+    return grub_error (GRUB_ERR_OUT_OF_MEMORY, "could not allocate memory for certificate.");
+
+  err = read_cert_from_file (cert_file, cert);
+  grub_file_close (cert_file);
+  if (err != GRUB_ERR_NONE)
+    {
+      grub_free (cert);
+      return err;
+    }
+
+  for (i = 0; i <= db.cert_entries; i++)
+    {
+      if (is_cert_match (current_cert, cert) == true)
+        {
+          if (i == 0) /* Match with first certificate in the db list. */
+            db.certs = current_cert->next;
+          else
+            previous_cert->next = current_cert->next;
+
+          current_cert->next = NULL;
+          certificate_release (current_cert);
+          grub_free (current_cert);
+          db.cert_entries--;
+          is_cert_found = true;
+          break;
+	}
+      else
+      {
+        previous_cert = current_cert;
+        current_cert = current_cert->next;
+      }
+    }
+
+  if (is_cert_found == false)
+    return grub_error (GRUB_ERR_UNKNOWN_COMMAND,
+                       "not found certificate CN=%s in the db list.", cert->subject);
+
+  return err;
+}
+
+static grub_err_t
+grub_cmd_dbx_sig (grub_extcmd_context_t ctxt, int argc, char **args)
+{
+  grub_err_t rc;
+  grub_file_t hash_file = NULL;
+  grub_uint8_t *hash_data = NULL;
+  grub_size_t hash_data_size = 0;
+
+  if (argc != 2)
+    {
+      grub_printf ("a distrusted certificate/binary hash file is expected\n"
+                   "Example:\n\tappend_rm_dbx_sig [option] <FILE>\n"
+                   "option:\n[-b|--binary-hash] FILE [BINARY HASH FILE]\n"
+                   "[-c|--cert-hash] FILE [CERTFICATE HASH FILE]\n");
+      return GRUB_ERR_BAD_ARGUMENT;
+    }
+
+  if (check_sigs == CHECK_SIGS_FORCED)
+    {
+      grub_printf ("Warning: since secure boot is enabled, "
+                   "adding of distrusted certificate/binary hash is not permitted!\n");
+      return GRUB_ERR_ACCESS_DENIED;
+    }
+
+  if (!ctxt->state[OPTION_BINARY_HASH].set && !ctxt->state[OPTION_CERT_HASH].set)
+    return grub_error (GRUB_ERR_BAD_ARGUMENT, "missing options and use --help to konw.");
+
+  if (grub_strlen (args[1]) == 0)
+    return grub_error (GRUB_ERR_BAD_FILENAME, "missing distrusted certificate/binary hash file.");
+
+  hash_file = grub_file_open (args[1], GRUB_FILE_TYPE_TO_HASH | GRUB_FILE_TYPE_NO_DECOMPRESS);
+  if (hash_file == NULL)
+    return grub_error (GRUB_ERR_FILE_NOT_FOUND,
+                       "unable to open the distrusted certificate/binary hash file.");
+
+  rc = file_read_all (hash_file, &hash_data, &hash_data_size);
+  if (rc != GRUB_ERR_NONE)
+    goto cleanup;
+
+  grub_dprintf ("appendedsig", "adding a distrusted certificate/binary hash %s\n"
+                " with size of %" PRIuGRUB_SIZE "\n", hash_data, hash_data_size);
+
+  if (ctxt->state[OPTION_BINARY_HASH].set)
+    {
+      /* Only accept SHA256, SHA384 and SHA512 binary hash */
+      if (hash_data_size != 32 && hash_data_size != 48 && hash_data_size != 64)
+        return grub_error (GRUB_ERR_BAD_SIGNATURE, "unacceptable distrusted binary hash type.");
+    }
+  else if (ctxt->state[OPTION_CERT_HASH].set)
+    {
+      /* Only accept SHA256, SHA384 and SHA512 certificate hash */
+      if (hash_data_size != 32 && hash_data_size != 48 && hash_data_size != 64)
+        return grub_error (GRUB_ERR_BAD_SIGNATURE, "unacceptable distrusted certificate hash type.");
+    }
+
+  rc = add_hash ((const grub_uint8_t **) &hash_data, hash_data_size, &dbx.signatures,
+                 &dbx.signature_size, &dbx.signature_entries);
+  if (rc != GRUB_ERR_NONE)
+    {
+      free_db_list ();
+      free_dbx_list ();
+      rc = grub_error (rc, "adding of distrusted binary/certificate hash failed.");
+    }
+
+ cleanup:
+  grub_file_close (hash_file);
+  grub_free (hash_data);
+
+  return rc;
 }
 
 static grub_err_t
@@ -816,8 +1058,6 @@ static struct grub_fs pseudo_fs = {
   .name = "pseudo",
   .fs_read = pseudo_read
 };
-
-static grub_command_t cmd_verify, cmd_list, cmd_dbx, cmd_db;
 
 /* Check the certificate hash presence in the dbx list. */
 static bool
@@ -1085,6 +1325,10 @@ load_static_keys (const struct grub_module_header *header, const bool is_pks)
   return rc;
 }
 
+static grub_extcmd_t cmd_dbx_sig;
+static grub_command_t cmd_verify, cmd_list_db, cmd_db_cert, cmd_db_sig,
+                      cmd_list_dbx, cmd_dbx_cert;
+
 GRUB_MOD_INIT (appendedsig)
 {
   int rc;
@@ -1147,14 +1391,25 @@ GRUB_MOD_INIT (appendedsig)
       grub_pks_free_keystore ();
     }
 
-  cmd_db = grub_register_command ("append_add_db_cert", grub_cmd_db, N_("X509_CERTIFICATE"),
-                                  N_("Add trusted X509_CERTIFICATE to the db"));
-  cmd_list = grub_register_command ("append_list_db", grub_cmd_list, 0,
-                                    N_("Show the list of trusted X.509 certificates from the db"));
+  cmd_db_cert = grub_register_command ("append_add_db_cert", grub_cmd_db_cert, N_("X509_CERTIFICATE"),
+                                       N_("Add X509_CERTIFICATE to the db list."));
+  cmd_db_sig = grub_register_command ("append_add_db_sig", grub_cmd_db_sig, N_("BINARY HASH FILE"),
+                                      N_("Add trusted BINARY HASH to the db list."));
+  cmd_dbx_cert = grub_register_command ("append_rm_dbx_cert", grub_cmd_dbx_cert, N_("X509_CERTIFICATE"),
+                                        N_("Remove X509_CERTIFICATE from the db list."));
+  cmd_dbx_sig = grub_register_extcmd ("append_add_dbx_sig", grub_cmd_dbx_sig, 0,
+                                      N_("[-b|--binary-hash] FILE [BINARY HASH FILE]\n"
+                                         "[-c|--cert-hash] FILE [CERTFICATE HASH FILE]"),
+                                      N_("Add distrusted CERTFICATE/BINARY HASH to the db list."), options);
+  cmd_list_db = grub_register_command ("append_list_db", grub_cmd_list_db, 0,
+                                       N_("Show the list of trusted x509 certificates and"
+                                          " trusted binary hashes from the db list."));
+  cmd_list_dbx = grub_register_command ("append_list_dbx", grub_cmd_list_dbx, 0,
+                                        N_("Show the list of distrusted certificates and"
+                                           " certificate/binary hashes from the dbx list"));
   cmd_verify = grub_register_command ("append_verify", grub_cmd_verify_signature, N_("FILE"),
-                                      N_("Verify FILE against the trusted X.509 certificates in the db"));
-  cmd_dbx = grub_register_command ("append_rm_dbx_cert", grub_cmd_dbx, N_("CERT_NUMBER"),
-                                   N_("Remove CERT_NUMBER (as listed by append_list_db) from the db"));
+                                      N_("Verify FILE against the trusted x509 certificates/"
+                                         "trusted binary hashes."));
 
   grub_verifier_register (&grub_appendedsig_verifier);
   grub_dl_set_persistent (mod);
@@ -1168,7 +1423,10 @@ GRUB_MOD_FINI (appendedsig)
    */
   grub_verifier_unregister (&grub_appendedsig_verifier);
   grub_unregister_command (cmd_verify);
-  grub_unregister_command (cmd_list);
-  grub_unregister_command (cmd_db);
-  grub_unregister_command (cmd_dbx);
+  grub_unregister_command (cmd_list_db);
+  grub_unregister_command (cmd_list_dbx);
+  grub_unregister_command (cmd_db_cert);
+  grub_unregister_command (cmd_db_sig);
+  grub_unregister_command (cmd_dbx_cert);
+  grub_unregister_extcmd (cmd_dbx_sig);
 }
