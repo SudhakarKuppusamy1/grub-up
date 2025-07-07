@@ -989,7 +989,7 @@ create_dbx_list (void)
  * parse it, and add it to the db list.
  */
 static grub_err_t
-build_static_db_list (const struct grub_module_header *header)
+build_static_db_list (const struct grub_module_header *header, const bool is_pks)
 {
   grub_err_t err;
   struct grub_file pseudo_file;
@@ -1007,6 +1007,12 @@ build_static_db_list (const struct grub_module_header *header)
   err = file_read_all (&pseudo_file, &cert_data, &cert_data_size);
   if (err != GRUB_ERR_NONE)
     return err;
+
+  if (is_pks == true)
+    {
+      if (is_dbx_cert_hash (cert_data, cert_data_size) == true)
+        return GRUB_ERR_ACCESS_DENIED;
+    }
 
   err = add_certificate (cert_data, cert_data_size, &db, true);
   grub_free (cert_data);
@@ -1060,6 +1066,25 @@ free_dbx_list (void)
   grub_memset (&dbx, 0, sizeof (dbx));
 }
 
+static grub_err_t
+load_static_keys (const struct grub_module_header *header, const bool is_pks)
+{
+  int rc = GRUB_ERR_NONE;
+
+  FOR_MODULES (header)
+    {
+      /* Not an ELF module, skip.  */
+      if (header->type != OBJ_TYPE_X509_PUBKEY)
+        continue;
+
+      rc = build_static_db_list (header, is_pks);
+      if (rc != GRUB_ERR_NONE)
+        return rc;
+    }
+
+  return rc;
+}
+
 GRUB_MOD_INIT (appendedsig)
 {
   int rc;
@@ -1078,26 +1103,28 @@ GRUB_MOD_INIT (appendedsig)
 
   if (!grub_pks_use_keystore && check_sigs == CHECK_SIGS_FORCED)
     {
-      FOR_MODULES (header)
+      rc = load_static_keys (header, false);
+      if (rc != GRUB_ERR_NONE)
         {
-          /* Not an ELF module, skip.  */
-          if (header->type != OBJ_TYPE_X509_PUBKEY)
-            continue;
-
-          rc = build_static_db_list (header);
-          if (rc != GRUB_ERR_NONE)
-            {
-              free_db_list ();
-              grub_error (rc, "static db list creation failed.");
-            }
-          else
-            grub_dprintf ("appendedsig", "the db list now has %" PRIuGRUB_SIZE " static keys.\n",
-                          db.cert_entries);
+          free_db_list ();
+          grub_error (rc, "static db list creation failed.");
         }
+      else
+        grub_dprintf ("appendedsig", "the db list now has %" PRIuGRUB_SIZE " static keys.\n",
+                      db.cert_entries);
     }
   else if (grub_pks_use_keystore && check_sigs == CHECK_SIGS_FORCED)
     {
-      rc = create_db_list ();
+
+      if (grub_pks_keystore.use_static_keys == true)
+        {
+          grub_printf ("Warning: db variable is not available at PKS and using a static keys "
+                       "as a default key in db list\n");
+          rc = load_static_keys (header, grub_pks_keystore.use_static_keys);
+        }
+      else
+        rc = create_db_list ();
+
       if (rc != GRUB_ERR_NONE)
         {
           free_db_list ();
