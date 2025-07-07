@@ -448,6 +448,77 @@ extract_appended_signature (const grub_uint8_t *buf, grub_size_t bufsize,
 }
 
 static grub_err_t
+get_binary_hash (const grub_size_t binary_hash_size, const grub_uint8_t *data,
+                 const grub_size_t data_size, grub_uint8_t *hash, grub_size_t *hash_size)
+{
+  grub_packed_guid_t guid = { 0 };
+
+  /* support SHA256, SHA384 and SHA512 for binary hash */
+  if (binary_hash_size == 32)
+    grub_memcpy (&guid, &GRUB_PKS_CERT_SHA256_GUID, GRUB_GUID_SIZE);
+  else if (binary_hash_size == 48)
+    grub_memcpy (&guid, &GRUB_PKS_CERT_SHA384_GUID, GRUB_GUID_SIZE);
+  else if (binary_hash_size == 64)
+    grub_memcpy (&guid, &GRUB_PKS_CERT_SHA512_GUID, GRUB_GUID_SIZE);
+  else
+    {
+      grub_dprintf ("appendedsig", "unsupported hash type (%" PRIuGRUB_SIZE ") and "
+                    "skipped the binary hash\n", binary_hash_size);
+      return GRUB_ERR_UNKNOWN_COMMAND;
+    }
+
+  return get_hash (&guid, data, data_size, hash, hash_size);
+}
+
+/*
+ * Verify binary hash against the db and dbx list.
+ * The following errors can occur:
+ *  - GRUB_ERR_BAD_SIGNATURE: indicates that the hash is in dbx list.
+ *  - GRUB_ERR_EOF: the hash could not be found in the db and dbx list.
+ *  - GRUB_ERR_NONE: the hash is found in db list.
+ */
+static grub_err_t
+verify_binary_hash (const grub_uint8_t *data, const grub_size_t data_size)
+{
+  grub_err_t rc = GRUB_ERR_NONE;
+  grub_size_t i = 0, hash_size = 0;
+  grub_uint8_t hash[GRUB_MAX_HASH_SIZE] = { 0 };
+
+  for (i = 0; i < dbx.signature_entries; i++)
+    {
+      rc = get_binary_hash (dbx.signature_size[i], data, data_size, hash, &hash_size);
+      if (rc != GRUB_ERR_NONE)
+        continue;
+
+      if (hash_size == dbx.signature_size[i] &&
+          grub_memcmp (dbx.signatures[i], hash, hash_size) == 0)
+        {
+          grub_dprintf ("appendedsig", "the binary hash (%02x%02x%02x%02x) is present in the dbx list\n",
+                        hash[0], hash[1], hash[2], hash[3]);
+          return GRUB_ERR_BAD_SIGNATURE;
+        }
+    }
+
+  for (i = 0; i < db.signature_entries; i++)
+    {
+      rc = get_binary_hash (db.signature_size[i], data, data_size, hash, &hash_size);
+      if (rc != GRUB_ERR_NONE)
+        continue;
+
+      if (hash_size == db.signature_size[i] &&
+          grub_memcmp (db.signatures[i], hash, hash_size) == 0)
+        {
+          grub_dprintf ("appendedsig", "verified with a trusted binary hash (%02x%02x%02x%02x)\n",
+                        hash[0], hash[1], hash[2], hash[3]);
+          return GRUB_ERR_NONE;
+        }
+    }
+
+  return GRUB_ERR_EOF;
+}
+
+/* Verify the kernel's integrity using db and dbx list */
+static grub_err_t
 grub_verify_appended_signature (const grub_uint8_t *buf, grub_size_t bufsize)
 {
   grub_err_t err = GRUB_ERR_NONE;
@@ -461,7 +532,7 @@ grub_verify_appended_signature (const grub_uint8_t *buf, grub_size_t bufsize)
   struct pkcs7_signerInfo *si;
   int i;
 
-  if (!db.cert_entries)
+  if (!db.cert_entries && !db.signature_entries)
     return grub_error (GRUB_ERR_BAD_SIGNATURE, "no trusted keys to verify against.");
 
   err = extract_appended_signature (buf, bufsize, &sig);
@@ -469,59 +540,67 @@ grub_verify_appended_signature (const grub_uint8_t *buf, grub_size_t bufsize)
     return err;
 
   datasize = bufsize - sig.signature_len;
-
-  for (i = 0; i < sig.pkcs7.signerInfo_count; i++)
+  /* Verify binary hash against the db and dbx list. */
+  err = verify_binary_hash (buf, datasize);
+  if (err == GRUB_ERR_BAD_SIGNATURE)
     {
-      /*
-       * This could be optimised in a couple of ways:
-       * - we could only compute hashes once per hash type.
-       * - we could track signer information and only verify where IDs match.
-       * For now we do the naive O(trusted keys * pkcs7 signers) approach.
-       */
-      si = &sig.pkcs7.signerInfos[i];
-      context = grub_zalloc (si->hash->contextsize);
-      if (context == NULL)
-        return grub_errno;
-
-      si->hash->init (context);
-      si->hash->write (context, buf, datasize);
-      si->hash->final (context);
-      hash = si->hash->read (context);
-
-      grub_dprintf ("appendedsig", "data size %" PRIxGRUB_SIZE ", signer %d hash %02x%02x%02x%02x...\n",
-                    datasize, i, hash[0], hash[1], hash[2], hash[3]);
-
-      err = GRUB_ERR_BAD_SIGNATURE;
-      for (pk = db.certs; pk != NULL; pk = pk->next)
-        {
-          rc = grub_crypto_rsa_pad (&hashmpi, hash, si->hash, pk->mpis[0]);
-          if (rc != GPG_ERR_NO_ERROR)
-            {
-              err = grub_error (GRUB_ERR_BAD_SIGNATURE,
-                                "error padding hash for RSA verification: %d", (int) rc);
-              grub_free (context);
-              goto cleanup;
-            }
-
-          rc = grub_crypto_pk_rsa->verify (0, hashmpi, &si->sig_mpi, pk->mpis, NULL, NULL);
-          gcry_mpi_release (hashmpi);
-          if (rc == GPG_ERR_NO_ERROR)
-            {
-              grub_dprintf ("appendedsig", "verify signer %d with key '%s' succeeded.\n",
-                            i, pk->subject);
-              err = GRUB_ERR_NONE;
-              break;
-            }
-
-          grub_dprintf ("appendedsig", "verify signer %d with key '%s' failed with %d\n",
-                        i, pk->subject, (int) rc);
-        }
-
-      grub_free (context);
-      if (err == GRUB_ERR_NONE)
-        break;
+      err = grub_error (err, "failed to verify the signature because this binary is in the dbx list.\n");
+      goto cleanup;
     }
+  else
+    {
+      for (i = 0; i < sig.pkcs7.signerInfo_count; i++)
+        {
+          /*
+           * This could be optimised in a couple of ways:
+           * - we could only compute hashes once per hash type.
+           * - we could track signer information and only verify where IDs match.
+           * For now we do the naive O(trusted keys * pkcs7 signers) approach.
+           */
+          si = &sig.pkcs7.signerInfos[i];
+          context = grub_zalloc (si->hash->contextsize);
+          if (context == NULL)
+            return grub_errno;
 
+          si->hash->init (context);
+          si->hash->write (context, buf, datasize);
+          si->hash->final (context);
+          hash = si->hash->read (context);
+
+          grub_dprintf ("appendedsig", "data size %" PRIxGRUB_SIZE ", signer %d hash %02x%02x%02x%02x...\n",
+                        datasize, i, hash[0], hash[1], hash[2], hash[3]);
+
+          err = GRUB_ERR_BAD_SIGNATURE;
+          for (pk = db.certs; pk != NULL; pk = pk->next)
+            {
+              rc = grub_crypto_rsa_pad (&hashmpi, hash, si->hash, pk->mpis[0]);
+              if (rc != GPG_ERR_NO_ERROR)
+                {
+                  err = grub_error (GRUB_ERR_BAD_SIGNATURE,
+                                    "error padding hash for RSA verification: %d", (int) rc);
+                  grub_free (context);
+                  goto cleanup;
+                }
+
+              rc = grub_crypto_pk_rsa->verify (0, hashmpi, &si->sig_mpi, pk->mpis, NULL, NULL);
+              gcry_mpi_release (hashmpi);
+              if (rc == GPG_ERR_NO_ERROR)
+                {
+                  grub_dprintf ("appendedsig", "verify signer %d with key '%s' succeeded.\n",
+                                i, pk->subject);
+                  err = GRUB_ERR_NONE;
+                  break;
+                }
+
+              grub_dprintf ("appendedsig", "verify signer %d with key '%s' failed with %d\n",
+                            i, pk->subject, (int) rc);
+            }
+
+          grub_free (context);
+          if (err == GRUB_ERR_NONE)
+            break;
+        }
+    }
   /* If we didn't verify, provide a neat message. */
   if (err != GRUB_ERR_NONE)
     err = grub_error (GRUB_ERR_BAD_SIGNATURE,
