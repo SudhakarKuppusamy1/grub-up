@@ -108,6 +108,7 @@ struct grub_pks
   grub_pks_sd_t *dbx;       /* Forbidden signature database. */
   grub_size_t db_entries;   /* Size of signature database. */
   grub_size_t dbx_entries;  /* Size of forbidden signature database. */
+  bool use_static_keys;     /* Flag to indicate use of static keys. */
 } GRUB_PACKED;
 
 typedef struct grub_pks grub_pks_t;
