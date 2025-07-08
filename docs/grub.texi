@@ -6420,9 +6420,12 @@ you forget a command, you can run the command @command{help}
 * [::                           Check file types and compare values
 * acpi::                        Load ACPI tables
 * append_add_db_cert::          Add an X.509 certificate to the db list
-* append_list_db::              List trusted certificates from the db list
+* append_add_db_sig::           Add an X.509 certificate/binary hash to the db list
+* append_add_dbx_sig::          Add an X.509 certificate/binary hash to the dbx list
+* append_list_db::              List trusted certificates/binary hashes from the db list
+* append_list_dbx::             List certificates and binary/certificate hashes from the dbx list
 * append_rm_dbx_cert::          Remove a certificate from the db list
-* append_verify::               Verify appended digital signature using db list
+* append_verify::               Verify appended digital signature using db and dbx list
 * authenticate::                Check whether user is in user list
 * background_color::            Set background color for active terminal
 * background_image::            Load background image for active terminal
@@ -6563,16 +6566,48 @@ certificates themselves.)
 See @xref{Using appended signatures} for more information.
 @end deffn
 
+@node append_add_db_sig
+@subsection append_add_db_sig
+
+@deffn Command append_add_db_sig hash_file
+Read a binary/certificate hash from the file @var{hash_file}
+and add it to GRUB's internal db list. These hash are used to validate linux image
+integrity if appended signatures validation failed when the environment variable
+@code{check_appended_signatures} is set to @code{enforce}.
+
+See @xref{Using appended signatures} for more information.
+@end deffn
+
+@node append_add_dbx_sig
+@subsection append_add_dbx_sig
+
+@deffn Command append_add_dbx_sig hash_file
+Read a binary/certificate hash from the file @var{hash_file}
+and add it to GRUB's internal dbx list. These hash are used to restrict validation
+of linux image integrity using db list if appended signatures validation failed
+when the environment variable @code{check_appended_signatures} is set to @code{enforce}.
+
+See @xref{Using appended signatures} for more information.
+@end deffn
+
 @node append_list_db
 @subsection append_list_db
 
 @deffn Command append_list_db
-List all X.509 certificates trusted by GRUB for validating appended signatures.
-The output is a numbered list of certificates, showing the certificate's serial
-number and Common Name.
+List all X.509 certificates and binary hashes trusted by GRUB for validating
+appended signatures. The output is a numbered list of certificates and binary hashes,
+showing the certificate's serial number and Common Name.
 
-The certificate number can be used as an argument to
-@command{append_rm_dbx_cert} (@pxref{append_rm_dbx_cert}).
+See @xref{Using appended signatures} for more information.
+@end deffn
+
+@node append_list_dbx
+@subsection append_list_dbx
+
+@deffn Command append_list_dbx
+List all the distrusted x509 certificates and binary/certificate hashes.
+The output is a numbered list of certificates and binary/certificate hashes,
+showing the certificate's serial number and Common Name.
 
 See @xref{Using appended signatures} for more information.
 @end deffn
@@ -6580,29 +6615,22 @@ See @xref{Using appended signatures} for more information.
 @node append_rm_dbx_cert
 @subsection append_rm_dbx_cert
 
-@deffn Command append_rm_dbx_cert cert_number
-Remove the X.509 certificate numbered @var{cert_number} from GRUB's keyring of
-db for verifying appended signatures.
+@deffn Command append_rm_dbx_cert X509_certificate
+Read a DER-formatted X.509 certificate from the file @var{X509_certificate}
+and remove this certificate from db list.
 
-@var{cert_number} is the certificate number as listed by
-@command{append_list_db} (@pxref{append_list_db}).
-
-These certificates are used to validate appended signatures when environment
-variable @code{check_appended_signatures} is set to @code{enforce}
-(@pxref{check_appended_signatures}), and by @command{append_verify}
-(@pxref{append_verify}). See @xref{Using appended signatures} for more
-information.
+See @xref{Using appended signatures} for more information.
 @end deffn
 
 @node append_verify
 @subsection append_verify
 
-@deffn Command append_verify file
-Verifies an appended signature on @var{file} against the trusted X.509 certificates
-known to GRUB (See @pxref{append_list_db}, @pxref{append_add_db_cert}, and
-@pxref{append_rm_dbx_cert}).
-Exit code @code{$?} is set to 0 if the signature validates
-successfully.  If validation fails, it is set to a non-zero value.
+@deffn Command append_verify signed_file
+Verifies an appended signature on @var{signed_file} against the trusted X.509 certificates
+known to GRUB (See @pxref{append_list_db},@pxref{append_list_dbx}, @pxref{append_add_db_cert},
+@pxref{append_add_db_sig}, @pxref{append_add_dbx_sig}, and @pxref{append_rm_dbx_cert}).
+Exit code @code{$?} is set to 0 if the signature validates successfully.
+If validation fails, it is set to a non-zero value.
 
 See @xref{Using appended signatures}, for more information.
 @end deffn
@@ -8925,10 +8953,16 @@ To enable appended signature verification, load the appendedsig module and an
 x509 certificate for verification. Building the appendedsig module into the
 core grub image is recommended.
 
-Certificates can be managed at boot time using the @pxref{append_add_db_cert},
-@pxref{append_rm_dbx_cert} and @pxref{append_list_db} commands.
-Certificates can also be built in to the core image using the @code{--x509}
-parameter to @command{grub-install} or @command{grub-mkimage}.
+For static key secure boot, certificates will be built in to the core image using
+the @code{--x509} parameter to @command{grub-install} or @command{grub-mkimage}.
+It allows listing the trusted certificates and binary hashes at boot time using
+@pxref{append_list_db} command.
+
+For dynamic key secure boot, it loads the db and dbx from Platform KeyStore (PKS).
+It allows listing the trusted certificates and binary hashes at boot time using
+@pxref{append_list_db} and listing distrusted certificates and binary/certificate
+hashes at boot time using @pxref{append_list_dbx} commands.
+
 A file can be explicitly verified using the @pxref{append_verify} command.
 
 Only signatures made with the SHA-256 or SHA-512 hash algorithm are supported,
