@@ -104,8 +104,6 @@ appended_signature_test (void)
   char *trust_args2[] = { (char *) "(proc)/certificate2.der", NULL };
   char *trust_args_printable[] = { (char *) "(proc)/certificate_printable.der", NULL };
   char *trust_args_eku[] = { (char *) "(proc)/certificate_eku.der", NULL };
-  char *distrust_args[] = { (char *) "1", NULL };
-  char *distrust2_args[] = { (char *) "2", NULL };
   grub_err_t err;
 
   grub_procfs_register ("certificate.der", &certificate_der_entry);
@@ -189,7 +187,7 @@ appended_signature_test (void)
    * removed by position in the list. Current the list looks like [#2, #1].
    *
    * First test removing the second certificate in the db list, which is
-   * certificate #1, giving us just [#2].
+   * certificate #1.
    */
   cmd_distrust = grub_command_find ("append_rm_dbx_cert");
   if (cmd_distrust == NULL)
@@ -198,7 +196,7 @@ appended_signature_test (void)
       return;
     }
 
-  err = (cmd_distrust->func) (cmd_distrust, 1, distrust2_args);
+  err = (cmd_distrust->func) (cmd_distrust, 1, trust_args);
   grub_test_assert (err == GRUB_ERR_NONE, "distrusting certificate 1 failed: %d: %s",
                     grub_errno, grub_errmsg);
   DO_TEST (hi_signed_2nd, 1);
@@ -211,18 +209,18 @@ appended_signature_test (void)
                     grub_errno, grub_errmsg);
   DO_TEST (hi_signed, 1);
 
-  /* Remove the first certificate in the db list, giving us just [#2]. */
-  err = (cmd_distrust->func) (cmd_distrust, 1, distrust_args);
-  grub_test_assert (err == GRUB_ERR_NONE, "distrusting certificate 1 (first time) failed: %d: %s",
+  /*  Remove the first certificate in the db list, which is certificate #2. */
+  err = (cmd_distrust->func) (cmd_distrust, 1, trust_args2);
+  grub_test_assert (err == GRUB_ERR_NONE, "distrusting certificate 2 (first time) failed: %d: %s",
                     grub_errno, grub_errmsg);
-  DO_TEST (hi_signed_2nd, 1);
-  DO_TEST (hi_signed, 0);
+  DO_TEST (hi_signed_2nd, 0);
+  DO_TEST (hi_signed, 1);
 
   /*
-   * Remove the first certificate again, giving an empty db list.
+   * Remove the certificate#1 again, giving an empty db list.
    * append_verify should fail if there are no certificates to verify against.
    */
-  err = (cmd_distrust->func) (cmd_distrust, 1, distrust_args);
+  err = (cmd_distrust->func) (cmd_distrust, 1, trust_args);
   grub_test_assert (err == GRUB_ERR_NONE, "distrusting certificate 1 (second time) failed: %d: %s",
                     grub_errno, grub_errmsg);
   DO_TEST (hi_signed_2nd, 0);
